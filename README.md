@@ -13,8 +13,8 @@ This is a small set of scripts to build around the BeagleV-Fire (Linux) and UART
 - if you board, the BeagleV-Fire, does not respond to the IP Address, look up your IP Address and use that instead
 
 - now, we have our bootable image and board ready
-* sudo apt update && sudo apt upgrade
-* sudo apt install git python3 python3-venv python3-flask python3-serial
+* `sudo apt update && sudo apt upgrade`
+* `sudo apt install git python3 python3-venv python3-flask python3-serial`
 * the last `apt` install is for serial, i.e. so we can alter UART commands
 
 ```
