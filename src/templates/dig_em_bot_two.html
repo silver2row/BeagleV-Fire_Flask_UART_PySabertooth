@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rover Telemetry Control Deck</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 1.5rem;
+            box-sizing: border-box;
+        }
+        .control-panel {
+            background-color: #1e1e1e;
+            padding: 1.5rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            text-align: center;
+            max-width: 640px;
+            width: 100%;
+        }
+        h1 {
+            margin-top: 0;
+            margin-bottom: 1rem;
+            color: #ffffff;
+            font-size: 1.5rem;
+            letter-spacing: 0.5px;
+        }
+        .video-container {
+            width: 100%;
+            background-color: #050505;
+            border-radius: 8px;
+            overflow: hidden;
+            aspect-ratio: 16 / 9;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #333;
+            margin-bottom: 1rem;
+            position: relative;
+        }
+        .video-container img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .video-placeholder {
+            color: #666;
+            font-size: 0.9rem;
+            position: absolute;
+            font-family: monospace;
+        }
+        .dashboard-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        .status-box {
+            flex: 1;
+            background: #2a2a2a;
+            padding: 0.75rem;
+            border-radius: 8px;
+            text-align: left;
+        }
+        .status-label {
+            font-size: 0.75rem;
+            color: #aaaaaa;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .status-value {
+            font-size: 1.1rem;
+            font-weight: bold;
+            color: #ff9100;
+            margin-top: 0.2rem;
+            transition: color 0.2s ease;
+        }
+        .telemetry-box {
+            flex: 1;
+            display: flex;
+            justify-content: space-around;
+            background: #2a2a2a;
+            padding: 0.75rem;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 1.1rem;
+            align-items: center;
+        }
+        .motor-label {
+            color: #888;
+            font-size: 0.9rem;
+        }
+        .motor-val {
+            color: #29b6f6;
+            font-weight: bold;
+        }
+        .input-hint {
+            margin-top: 1rem;
+            font-size: 0.8rem;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="control-panel">
+        <h1>ROVER FPV PILOT DECK</h1>
+        
+        <!-- Live Video Stream Container -->
+        <div class="video-container">
+            <div class="video-placeholder">NO LIVE CAM FEED MOUNTED</div>
+            <img id="camera-feed" src="http://localhost:8080/?action=stream" onerror="this.style.display='none';" onload="document.querySelector('.video-placeholder').style.display='none';">
+        </div>
+
+        <div class="dashboard-row">
+            <!-- System Link Monitor -->
+            <div class="status-box">
+                <div class="status-label">System Link</div>
+                <div id="rover-status" class="status-value">Keyboard Mode</div>
+            </div>
+
+            <!-- Real-time Motor Output Telemetry -->
+            <div class="telemetry-box">
+                <div><span class="motor-label">LEFT:</span> <span id="left-display" class="motor-val">0.00</span></div>
+                <div><span class="motor-label">RIGHT:</span> <span id="right-display" class="motor-val">0.00</span></div>
+            </div>
+        </div>
+
+        <div class="input-hint">
+            Control using connected **Gamepad Left Stick** or **WASD / Arrow Keys**
+        </div>
+    </div>
+
+    <script>
+        // --- 1. Core Transmit Network Routine ---
+        function sendDriveCommand(vector) { 
+            fetch('/control', { 
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' }, 
+                body: JSON.stringify({ action: vector }) 
+            }) 
+            .then(res => res.json()) 
+            .then(data => { 
+                const statusEl = document.getElementById('rover-status');
+                // Don't overwrite basic structural mode naming schemas unless error clearance occurs
+                if(gamepadIndex !== null) {
+                    statusEl.textContent = data.status; 
+                    statusEl.style.color = "#00e676"; 
+                } else {
+                    statusEl.textContent = "Keyboard Active";
+                    statusEl.style.color = "#00e676";
+                }
+            }) 
+            .catch(err => { 
+                console.error('Signal drop:', err); 
+                const statusEl = document.getElementById('rover-status');
+                statusEl.textContent = "Link Failure"; 
+                statusEl.style.color = "#ff1744"; 
+            }); 
+        }
+
+        // --- 2. Network Throttling Layer ---
+        function throttle(func, limit) {
+            let inThrottle;
+            return function(...args) {
+                if (!inThrottle) {
+                    func.apply(this, args);
+                    inThrottle = true;
+                    setTimeout(() => inThrottle = false, limit);
+                }
+            }
+        }
+        const throttledSendDriveCommand = throttle(sendDriveCommand, 100);
+
+        // --- 3. Differential Steering Transformation Core ---
+        function calculateDifferentialSpeeds(x, y) {
+            const forward = -y; 
+            const turn = x;
+
+            let left = forward + turn;
+            let right = forward - turn;
+
+            left = Math.max(-1.0, Math.min(1.0, left));
+            right = Math.max(-1.0, Math.min(1.0, right));
+
+            if (Math.abs(left) < 0.05) left = 0;
+            if (Math.abs(right) < 0.05) right = 0;
+
+            return { left, right };
+        }
+
+        // --- 4. Shared Input Processing Hub ---
+        let lastSentMoved = false;
+
+        function processMovement(x, y) {
+            const motorSpeeds = calculateDifferentialSpeeds(x, y);
+
+            // Update user dashboard interface telemetry metrics
+            document.getElementById('left-display').textContent = motorSpeeds.left.toFixed(2);
+            document.getElementById('right-display').textContent = motorSpeeds.right.toFixed(2);
+
+            const currentlyMoving = (motorSpeeds.left !== 0 || motorSpeeds.right !== 0);
+
+            // Optimization loop matrix bounds evaluation rulesets
+            if (currentlyMoving || lastSentMoved) {
+                throttledSendDriveCommand({
+                    left_motor: motorSpeeds.left.toFixed(2),
+                    right_motor: motorSpeeds.right.toFixed(2)
+                });
+                lastSentMoved = currentlyMoving;
+            }
+        }
+
+        // --- 5. Gamepad State Tracker Loop ---
+        let gamepadIndex = null;
+        const STICK_DEADZONE = 0.15;
+
+        window.addEventListener("gamepadconnected", (e) => {
+            console.log("Hardware connection bound:", e.gamepad.id);
+            gamepadIndex = e.gamepad.index;
+            requestAnimationFrame(pollGamepad);
+        });
+
+        window.addEventListener("gamepaddisconnected", (e) => {
+            if (gamepadIndex === e.gamepad.index) {
+                gamepadIndex = null;
+                const statusEl = document.getElementById('rover-status');
+                statusEl.textContent = "Keyboard Mode";
+                statusEl.style.color = "#ff9100";
+                processMovement(0, 0); // Hard stop the wheels instantly on disconnect
+            }
+        });
+
+        function pollGamepad() {
+            if (gamepadIndex === null) return; 
+
+            const gamepads = navigator.getGamepads();
+            const gp = gamepads[gamepadIndex];
+
+            if (gp) {
+                let x = gp.axes[0];
+                let y = gp.axes[1];
+
+                if (Math.abs(x) < STICK_DEADZONE) x = 0;
+                if (Math.abs(y) < STICK_DEADZONE) y = 0;
+
+                processMovement(x, y);
+            }
+            requestAnimationFrame(pollGamepad);
+        }
+
+        // --- 6. Keyboard Control Matrix ---
+        const activeKeys = { w: false, a: false, s: false, d: false, ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false };
+
+        window.addEventListener("keydown", (e) => {
+            if (e.key in activeKeys) {
+                activeKeys[e.key] = true;
+                evaluateKeyboardInput();
+            }
+        });
+
+        window.addEventListener("keyup", (e) => {
+            if (e.key in activeKeys) {
+                activeKeys[e.key] = false;
+                evaluateKeyboardInput();
+            }
+        });
+
+        function evaluateKeyboardInput() {
+            // If a physical controller is actively engaged, let it take precedence
+            if (gamepadIndex !== null) return;
+
+            let x = 0;
+            let y = 0;
+
+            // Compute structural directions based on keystroke arrays
+            if (activeKeys.w || activeKeys.ArrowUp)    y -= 1.0;
+            if (activeKeys.s || activeKeys.ArrowDown)  y += 1.0;
+            if (activeKeys.a || activeKeys.ArrowLeft)  x -= 1.0;
+            if (activeKeys.d || activeKeys.ArrowRight) x += 1.0;
+		    
+            processMovement(x, y);			
+        }
+    </script>
+</body>
+</html>
+	
